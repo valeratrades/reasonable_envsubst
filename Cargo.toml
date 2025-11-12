@@ -12,5 +12,8 @@ anyhow = "*"
 clap = { version = "4.5.4", features = ["derive"] }
 clap-stdin = "0.4.0"
 
+[dev-dependencies]
+tempfile = "3"
+
 [package.metadata.cargo-machete]
 ignored = ["derive-new", "anyhow", "serde", "tokio"]

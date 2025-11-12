@@ -1,6 +1,7 @@
 use std::env;
-use std::fs;
+use std::io::Write;
 use std::process::Command;
+use tempfile::NamedTempFile;
 
 fn get_binary_path() -> String {
 	let cargo_manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -14,8 +15,6 @@ fn test_dollar_brace_pattern() {
 	env::set_var("MULTIPLE1", "first");
 	env::set_var("MULTIPLE2", "second");
 	env::remove_var("UNKNOWN_VAR");
-
-	let temp_file = "/tmp/test_dollar_brace.txt";
 
 	// Test single replacement
 	let input = "Hello, ${KNOWN_VAR}!";
@@ -43,15 +42,16 @@ fn test_dollar_brace_pattern() {
 
 	// Test from stdin
 	let input = "From stdin: ${VAR1}";
-	fs::write(temp_file, input).unwrap();
+	let mut temp_file = NamedTempFile::new().unwrap();
+	temp_file.write_all(input.as_bytes()).unwrap();
+	temp_file.flush().unwrap();
+
 	let output = Command::new(get_binary_path())
 		.arg("-")
-		.stdin(fs::File::open(temp_file).unwrap())
+		.stdin(std::fs::File::open(temp_file.path()).unwrap())
 		.output()
 		.expect("Failed to execute binary");
 	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "From stdin: value1");
-
-	fs::remove_file(temp_file).ok();
 }
 
 #[test]
@@ -61,8 +61,6 @@ fn test_env_object_pattern() {
 	env::set_var("A", "apple");
 	env::set_var("B", "banana");
 	env::remove_var("UNKNOWN_VAR");
-
-	let temp_file = "/tmp/test_env_object.txt";
 
 	// Test single replacement
 	let input = r#"Config: { env = "MY_VAR" }"#;
@@ -90,13 +88,14 @@ fn test_env_object_pattern() {
 
 	// Test from stdin with mixed patterns
 	let input = r#"From stdin: { env = "VAR2" } and ${VAR2}"#;
-	fs::write(temp_file, input).unwrap();
+	let mut temp_file = NamedTempFile::new().unwrap();
+	temp_file.write_all(input.as_bytes()).unwrap();
+	temp_file.flush().unwrap();
+
 	let output = Command::new(get_binary_path())
 		.arg("-")
-		.stdin(fs::File::open(temp_file).unwrap())
+		.stdin(std::fs::File::open(temp_file.path()).unwrap())
 		.output()
 		.expect("Failed to execute binary");
 	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"From stdin: "value2" and value2"#);
-
-	fs::remove_file(temp_file).ok();
 }
