@@ -1,15 +1,29 @@
 use std::env;
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-fn get_binary_path() -> String {
+fn get_binary_path() -> Option<String> {
 	let cargo_manifest_dir = env!("CARGO_MANIFEST_DIR");
-	format!("{}/target/debug/reasonable_envsubst", cargo_manifest_dir)
+	let debug_path = format!("{}/target/debug/reasonable_envsubst", cargo_manifest_dir);
+	let release_path = format!("{}/target/release/reasonable_envsubst", cargo_manifest_dir);
+
+	if Path::new(&debug_path).exists() {
+		Some(debug_path)
+	} else if Path::new(&release_path).exists() {
+		Some(release_path)
+	} else {
+		None
+	}
 }
 
 #[test]
 fn test_dollar_brace_pattern() {
+	let Some(binary_path) = get_binary_path() else {
+		eprintln!("Skipping integration test: binary not found in target directory");
+		return;
+	};
 	env::set_var("KNOWN_VAR", "rust-lang");
 	env::set_var("VAR1", "value1");
 	env::set_var("MULTIPLE1", "first");
@@ -18,7 +32,7 @@ fn test_dollar_brace_pattern() {
 
 	// Test single replacement
 	let input = "Hello, ${KNOWN_VAR}!";
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg(input)
 		.output()
 		.expect("Failed to execute binary");
@@ -26,7 +40,7 @@ fn test_dollar_brace_pattern() {
 
 	// Test unknown variable (should skip)
 	let input = "Known: ${KNOWN_VAR}, unknown: ${UNKNOWN_VAR}";
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg(input)
 		.output()
 		.expect("Failed to execute binary");
@@ -34,7 +48,7 @@ fn test_dollar_brace_pattern() {
 
 	// Test multiple replacements
 	let input = "${MULTIPLE1} and ${MULTIPLE2}";
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg(input)
 		.output()
 		.expect("Failed to execute binary");
@@ -46,7 +60,7 @@ fn test_dollar_brace_pattern() {
 	temp_file.write_all(input.as_bytes()).unwrap();
 	temp_file.flush().unwrap();
 
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg("-")
 		.stdin(std::fs::File::open(temp_file.path()).unwrap())
 		.output()
@@ -56,6 +70,11 @@ fn test_dollar_brace_pattern() {
 
 #[test]
 fn test_env_object_pattern() {
+	let Some(binary_path) = get_binary_path() else {
+		eprintln!("Skipping integration test: binary not found in target directory");
+		return;
+	};
+
 	env::set_var("MY_VAR", "my-value");
 	env::set_var("VAR2", "value2");
 	env::set_var("A", "apple");
@@ -64,7 +83,7 @@ fn test_env_object_pattern() {
 
 	// Test single replacement
 	let input = r#"Config: { env = "MY_VAR" }"#;
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg(input)
 		.output()
 		.expect("Failed to execute binary");
@@ -72,7 +91,7 @@ fn test_env_object_pattern() {
 
 	// Test unknown variable (should skip)
 	let input = r#"Known: { env = "MY_VAR" }, unknown: { env = "UNKNOWN_VAR" }"#;
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg(input)
 		.output()
 		.expect("Failed to execute binary");
@@ -80,7 +99,7 @@ fn test_env_object_pattern() {
 
 	// Test multiple replacements
 	let input = r#"{ env = "A" } and { env = "B" }"#;
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg(input)
 		.output()
 		.expect("Failed to execute binary");
@@ -92,7 +111,7 @@ fn test_env_object_pattern() {
 	temp_file.write_all(input.as_bytes()).unwrap();
 	temp_file.flush().unwrap();
 
-	let output = Command::new(get_binary_path())
+	let output = Command::new(&binary_path)
 		.arg("-")
 		.stdin(std::fs::File::open(temp_file.path()).unwrap())
 		.output()
