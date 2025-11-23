@@ -37,24 +37,30 @@ fn replace_env_vars(input: &str) -> String {
 			}
 			// Check for { env = "VARIABLE_NAME" } pattern
 			else if s[i..].starts_with("{ env = \"") {
-				if let Some(quote_end) = s[i + 9..].find('"') {
-					if let Some(brace_end) = s[i + 9 + quote_end..].find(" }") {
-						let var = &s[i + 9..i + 9 + quote_end];
-						let pattern_end = i + 9 + quote_end + brace_end + 2;
-						let full_pattern = &s[i..pattern_end];
+				// Check if this line is commented out (starts with #)
+				let line_start = s[..i].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+				let is_commented = s[line_start..i].trim_start().starts_with('#');
 
-						match env::var(var) {
-							Ok(value) => {
-								// Replace the entire pattern with just the quoted value
-								s = s.replacen(full_pattern, &format!("\"{}\"", value), 1);
-								found = true;
-								break;
-							}
-							Err(e) => {
-								eprintln!("Warning: {e}: {var}. Skipping.");
-								// Skip over this pattern without replacing
-								// We need to mark this as processed to avoid infinite loop
-								s = s.replacen(full_pattern, full_pattern, 1);
+				if !is_commented {
+					if let Some(quote_end) = s[i + 9..].find('"') {
+						if let Some(brace_end) = s[i + 9 + quote_end..].find(" }") {
+							let var = &s[i + 9..i + 9 + quote_end];
+							let pattern_end = i + 9 + quote_end + brace_end + 2;
+							let full_pattern = &s[i..pattern_end];
+
+							match env::var(var) {
+								Ok(value) => {
+									// Replace the entire pattern with just the quoted value
+									s = s.replacen(full_pattern, &format!("\"{}\"", value), 1);
+									found = true;
+									break;
+								}
+								Err(e) => {
+									eprintln!("Warning: {e}: {var}. Skipping.");
+									// Skip over this pattern without replacing
+									// We need to mark this as processed to avoid infinite loop
+									s = s.replacen(full_pattern, full_pattern, 1);
+								}
 							}
 						}
 					}
@@ -109,6 +115,40 @@ mod tests {
 
 		let input = r#"Old style: ${VAR1}, new style: { env = "VAR2" }"#;
 		let expected_output = r#"Old style: value1, new style: "value2""#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+	}
+
+	#[test]
+	fn test_commented_lines_ignored() {
+		env::set_var("COMMENT_VAR", "should-not-replace");
+		env::set_var("ACTIVE_VAR", "should-replace");
+
+		// Test single line comment
+		let input = r#"# { env = "COMMENT_VAR" }"#;
+		let expected_output = r#"# { env = "COMMENT_VAR" }"#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+
+		// Test comment with leading spaces
+		let input = r#"   # { env = "COMMENT_VAR" }"#;
+		let expected_output = r#"   # { env = "COMMENT_VAR" }"#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+
+		// Test multiline with commented and uncommented
+		let input = r#"active: { env = "ACTIVE_VAR" }
+# commented: { env = "COMMENT_VAR" }
+another: { env = "ACTIVE_VAR" }"#;
+		let expected_output = r#"active: "should-replace"
+# commented: { env = "COMMENT_VAR" }
+another: "should-replace""#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+
+		// Test that ${} pattern is NOT affected by comment logic (should still work in comments)
+		let input = r#"# This is a comment ${COMMENT_VAR}"#;
+		let expected_output = r#"# This is a comment should-not-replace"#;
 		let output = replace_env_vars(input);
 		assert_eq!(output, expected_output);
 	}

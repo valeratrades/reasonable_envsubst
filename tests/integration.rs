@@ -118,3 +118,67 @@ fn test_env_object_pattern() {
 		.expect("Failed to execute binary");
 	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"From stdin: "value2" and value2"#);
 }
+
+#[test]
+fn test_commented_lines_ignored() {
+	let Some(binary_path) = get_binary_path() else {
+		eprintln!("Skipping integration test: binary not found in target directory");
+		return;
+	};
+
+	env::set_var("COMMENT_VAR", "should-not-replace");
+	env::set_var("ACTIVE_VAR", "should-replace");
+
+	// Test single line comment with { env = "..." } pattern
+	let input = r#"# { env = "COMMENT_VAR" }"#;
+	let output = Command::new(&binary_path)
+		.arg(input)
+		.output()
+		.expect("Failed to execute binary");
+	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"# { env = "COMMENT_VAR" }"#);
+
+	// Test comment with leading spaces
+	let input = r#"   # { env = "COMMENT_VAR" }"#;
+	let output = Command::new(&binary_path)
+		.arg(input)
+		.output()
+		.expect("Failed to execute binary");
+	assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), r#"   # { env = "COMMENT_VAR" }"#);
+
+	// Test multiline with mix of commented and uncommented lines
+	let input = r#"active: { env = "ACTIVE_VAR" }
+# commented: { env = "COMMENT_VAR" }
+another: { env = "ACTIVE_VAR" }"#;
+	let output = Command::new(&binary_path)
+		.arg(input)
+		.output()
+		.expect("Failed to execute binary");
+	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"active: "should-replace"
+# commented: { env = "COMMENT_VAR" }
+another: "should-replace""#);
+
+	// Test from stdin with commented lines
+	let input = r#"# Config comment: { env = "COMMENT_VAR" }
+real_value: { env = "ACTIVE_VAR" }
+  # Another comment: { env = "COMMENT_VAR" }"#;
+	let mut temp_file = NamedTempFile::new().unwrap();
+	temp_file.write_all(input.as_bytes()).unwrap();
+	temp_file.flush().unwrap();
+
+	let output = Command::new(&binary_path)
+		.arg("-")
+		.stdin(std::fs::File::open(temp_file.path()).unwrap())
+		.output()
+		.expect("Failed to execute binary");
+	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"# Config comment: { env = "COMMENT_VAR" }
+real_value: "should-replace"
+  # Another comment: { env = "COMMENT_VAR" }"#);
+
+	// Verify ${} pattern still works in comments (not affected by comment logic)
+	let input = r#"# This is a comment ${COMMENT_VAR}"#;
+	let output = Command::new(&binary_path)
+		.arg(input)
+		.output()
+		.expect("Failed to execute binary");
+	assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"# This is a comment should-not-replace"#);
+}
