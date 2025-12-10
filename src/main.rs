@@ -18,8 +18,24 @@ fn replace_env_vars(input: &str) -> String {
 	loop {
 		let mut found = false;
 		for i in 0..s.len() {
+			// Check for \${ pattern (for nix files, where ${} without backslash is interpreted as nix's own variable syntax)
+			if s[i..].starts_with("\\${") {
+				let end = s[i + 3..].find('}').unwrap_or(s.len());
+				let var = &s[i + 3..i + 3 + end];
+				match env::var(var) {
+					Ok(value) => {
+						s = s.replacen(&format!("\\${{{}}}", var), &value, 1);
+						found = true;
+						break;
+					}
+					Err(e) => {
+						eprintln!("Warning: {e}: {var}. Skipping.");
+						s = s.replacen(&format!("\\${{{}}}", var), &format!("\\${{{}}}", var), 1);
+					}
+				}
+			}
 			// Check for ${ pattern
-			if s[i..].starts_with("${") {
+			else if s[i..].starts_with("${") {
 				let end = s[i + 2..].find('}').unwrap_or(s.len());
 				let var = &s[i + 2..i + 2 + end];
 				match env::var(var) {
@@ -149,6 +165,31 @@ another: "should-replace""#;
 		// Test that ${} pattern is NOT affected by comment logic (should still work in comments)
 		let input = r#"# This is a comment ${COMMENT_VAR}"#;
 		let expected_output = r#"# This is a comment should-not-replace"#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+	}
+
+	#[test]
+	fn test_backslash_dollar_pattern() {
+		// For nix files, where ${} without backslash is interpreted as nix's own variable syntax //Q: maybe use a prefix like `nix\${}` instead?
+		env::set_var("NIX_VAR", "nix-value");
+		env::remove_var("UNKNOWN_NIX_VAR");
+
+		let input = r#"nix variable: \${NIX_VAR}"#;
+		let expected_output = r#"nix variable: nix-value"#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+
+		// Test unknown variable keeps the pattern
+		let input = r#"unknown: \${UNKNOWN_NIX_VAR}"#;
+		let expected_output = r#"unknown: \${UNKNOWN_NIX_VAR}"#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+
+		// Test mixed with regular ${} pattern
+		env::set_var("REGULAR_VAR", "regular-value");
+		let input = r#"regular: ${REGULAR_VAR}, nix: \${NIX_VAR}"#;
+		let expected_output = r#"regular: regular-value, nix: nix-value"#;
 		let output = replace_env_vars(input);
 		assert_eq!(output, expected_output);
 	}
