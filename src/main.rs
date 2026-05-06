@@ -18,6 +18,9 @@ fn replace_env_vars(input: &str) -> String {
 	loop {
 		let mut found = false;
 		for i in 0..s.len() {
+			if !s.is_char_boundary(i) {
+				continue;
+			}
 			// Check for \${ pattern (for nix files, where ${} without backslash is interpreted as nix's own variable syntax)
 			if s[i..].starts_with("\\${") {
 				let end = s[i + 3..].find('}').unwrap_or(s.len());

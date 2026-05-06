@@ -13,7 +13,7 @@
         pkgs = pkgsFor.${system};
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
       in {
-        default = pkgs.rustPlatform.buildRustPackage rec {
+        default = pkgs.rustPlatform.buildRustPackage {
           pname = manifest.name;
           version = manifest.version;
 
