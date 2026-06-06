@@ -4,9 +4,10 @@ use std::env;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
-/// Interprets environment variables in two formats:
+/// Interprets environment variables in three formats:
 /// - `${}` pattern: ${VARIABLE_NAME} -> expanded value
 /// - Object pattern: { env = "VARIABLE_NAME" } -> "expanded value"
+/// - Nix dotted-attr pattern: foo.env = "VARIABLE_NAME" -> foo = "expanded value"
 /// Without these patterns, text will not be replaced.
 /// NB: when providing the string via stdin, must pass '-' instead of normal arguments.
 struct Cli {
@@ -85,6 +86,52 @@ fn replace_env_vars(input: &str) -> String {
 					}
 				}
 			}
+			// Check for nix dotted-attr pattern: `<attr>.env = "VARIABLE_NAME"`
+			// (desugars in nix to `<attr> = { env = "VARIABLE_NAME"; }`). Replace the
+			// whole `<attr>.env = "VAR"` span with `<attr> = "value"`, keeping the attr name.
+			else if s[i..].starts_with(".env = \"") {
+				// Walk back over the attr name (nix identifier chars) to its start.
+				let mut name_start = i;
+				while name_start > 0 {
+					let prev = name_start - 1;
+					if !s.is_char_boundary(prev) {
+						break;
+					}
+					let c = s.as_bytes()[prev];
+					if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b'\'' {
+						name_start = prev;
+					} else {
+						break;
+					}
+				}
+				let attr = &s[name_start..i];
+				// Only a real attr-path if there's an identifier before `.env`.
+				if !attr.is_empty() {
+					// Skip if the line is commented out.
+					let line_start = s[..name_start].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+					let is_commented = s[line_start..name_start].trim_start().starts_with('#');
+					if !is_commented {
+						// Value var starts after `.env = "` (8 bytes); find its closing quote.
+						let var_start = i + 8;
+						if let Some(quote_len) = s[var_start..].find('"') {
+							let var = &s[var_start..var_start + quote_len];
+							let pattern_end = var_start + quote_len + 1;
+							let full_pattern = &s[name_start..pattern_end];
+							match env::var(var) {
+								Ok(value) => {
+									s = s.replacen(full_pattern, &format!("{attr} = \"{value}\""), 1);
+									found = true;
+									break;
+								}
+								Err(e) => {
+									eprintln!("Warning: {e}: {var}. Skipping.");
+									s = s.replacen(full_pattern, full_pattern, 1);
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 		if !found {
 			break;
@@ -125,6 +172,27 @@ mod tests {
 		let expected_output = r#"Config: "my-value" and "another-value", unknown: { env = "UNKNOWN_VAR" }"#;
 		let output = replace_env_vars(input);
 		assert_eq!(output, expected_output);
+	}
+
+	#[test]
+	fn test_nix_dotted_attr_pattern() {
+		env::set_var("DOTTED_VAR", "dotted-value");
+		env::set_var("DOTTED_OTHER", "other-value");
+		env::remove_var("DOTTED_UNKNOWN");
+
+		// Matches the nix sugar `api_public.env = "VAR";` used in real configs.
+		let input = "exchanges = {\n  api_public.env = \"DOTTED_VAR\";\n  api_secret.env = \"DOTTED_OTHER\";\n  missing.env = \"DOTTED_UNKNOWN\";\n};";
+		let expected_output = "exchanges = {\n  api_public = \"dotted-value\";\n  api_secret = \"other-value\";\n  missing.env = \"DOTTED_UNKNOWN\";\n};";
+		let output = replace_env_vars(input);
+		assert_eq!(output, expected_output);
+	}
+
+	#[test]
+	fn test_nix_dotted_attr_commented() {
+		env::set_var("DOTTED_COMMENT", "should-not-replace");
+		let input = r#"  # api_public.env = "DOTTED_COMMENT""#;
+		let output = replace_env_vars(input);
+		assert_eq!(output, input);
 	}
 
 	#[test]
